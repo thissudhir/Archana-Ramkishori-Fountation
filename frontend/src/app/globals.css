@@ -14,6 +14,15 @@ html,
 body {
   max-width: 100vw;
   overflow-x: hidden;
+  scrollbar-width: none;
+  /* For Firefox */
+  -ms-overflow-style: none;
+  /* For Internet Explorer and Edge */
+}
+
+/* Hide WebKit scrollbar */
+body::-webkit-scrollbar {
+  display: none;
 }
 
 body {
@@ -22,6 +31,9 @@ body {
   font-family: Arial, Helvetica, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  margin: 0;
+  padding: 0;
+  width: 100%;
 }
 
 * {
