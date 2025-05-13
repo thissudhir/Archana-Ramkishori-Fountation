@@ -1,10 +1,15 @@
 const mongoose = require('mongoose');
 
 const donationSchema = new mongoose.Schema({
-    transactionId: {
+    orderId: {
         type: String,
         required: true,
         unique: true,
+    },
+    transactionId: {
+        type: String,
+        unique: true,
+        sparse: true,
     },
     amount: {
         type: Number,
@@ -12,7 +17,7 @@ const donationSchema = new mongoose.Schema({
     },
     currency: {
         type: String,
-        default: 'USD',
+        default: 'INR',
     },
     donor: {
         name: String,
@@ -29,9 +34,14 @@ const donationSchema = new mongoose.Schema({
     },
     paymentMethod: {
         type: String,
+        enum: ['razorpay'],
         required: true,
     },
     createdAt: {
+        type: Date,
+        default: Date.now,
+    },
+    updatedAt: {
         type: Date,
         default: Date.now,
     }

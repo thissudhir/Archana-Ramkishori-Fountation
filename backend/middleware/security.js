@@ -7,15 +7,21 @@ const limiter = rateLimit({
 });
 
 const securityMiddleware = [
-    helmet(),
+    helmet({
+        crossOriginResourcePolicy: { policy: "cross-origin" },
+        crossOriginEmbedderPolicy: false,
+    }),
     limiter,
     helmet.contentSecurityPolicy({
         directives: {
             defaultSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://checkout.razorpay.com"],
             imgSrc: ["'self'", "data:", "https:"],
-            connectSrc: ["'self'", "https://api.stripe.com"],
+            connectSrc: ["'self'", "https://*.razorpay.com"],
+            frameSrc: ["'self'", "https://api.razorpay.com", "https://checkout.razorpay.com"],
+            formAction: ["'self'"],
+            frameAncestors: ["'none'"]
         },
     }),
 ];

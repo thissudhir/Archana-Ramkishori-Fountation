@@ -1,9 +1,14 @@
 import axios, { AxiosError, AxiosInstance } from "axios";
-import { DonationFormData, RazorpayOrderResponse } from "../types/donation";
+import {
+  DonationFormData,
+  RazorpayOrderResponse,
+  RazorpayOptions,
+} from "../types/donation";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api";
+const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID!;
 
-class ApiService {
+class RazorpayService {
   private api: AxiosInstance;
 
   constructor() {
@@ -15,13 +20,10 @@ class ApiService {
       timeout: 10000,
     });
 
-    // Add response interceptor for error handling
     this.api.interceptors.response.use(
       (response) => response,
       (error: AxiosError) => {
-        if (error.response?.status === 429) {
-          console.error("Rate limit exceeded");
-        }
+        console.error("API Error:", error);
         return Promise.reject(this.handleError(error));
       }
     );
@@ -71,47 +73,32 @@ class ApiService {
     } catch (error) {
       throw this.handleError(error as AxiosError);
     }
-    try {
-      const response = await this.api.post<PaymentIntentResponse>(
-        "/payments/create-payment-intent",
-        data
-      );
-      return response.data;
-    } catch (error) {
-      if (error instanceof AxiosError) {
-        throw this.handleError(error);
-      }
-      throw error;
-    }
   }
 
-  async verifyDonation(paymentIntentId: string): Promise<{ status: string }> {
-    try {
-      const response = await this.api.get(
-        `/payments/verify/${paymentIntentId}`
-      );
-      return response.data;
-    } catch (error) {
-      if (error instanceof AxiosError) {
-        throw this.handleError(error);
-      }
-      throw error;
-    }
-  }
-
-  async getDonationHistory(email: string): Promise<DonationData[]> {
-    try {
-      const response = await this.api.get(`/payments/history`, {
-        params: { email },
-      });
-      return response.data;
-    } catch (error) {
-      if (error instanceof AxiosError) {
-        throw this.handleError(error);
-      }
-      throw error;
-    }
+  getRazorpayOptions(
+    orderData: RazorpayOrderResponse,
+    userData: DonationFormData
+  ): RazorpayOptions {
+    return {
+      key: RAZORPAY_KEY,
+      amount: orderData.amount,
+      currency: orderData.currency,
+      name: "Archana Ramkishori Foundation",
+      description: "Donation for NGO",
+      order_id: orderData.id,
+      prefill: {
+        name: userData.name,
+        email: userData.email,
+        contact: userData.phone,
+      },
+      notes: {
+        address: "Foundation Headquarters",
+      },
+      theme: {
+        color: "#3399cc",
+      },
+    };
   }
 }
 
-export const apiService = new ApiService();
+export const razorpayService = new RazorpayService();

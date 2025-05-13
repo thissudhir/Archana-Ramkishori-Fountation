@@ -1,12 +1,7 @@
 "use client";
-import { useState } from "react";
-import { loadStripe } from "@stripe/stripe-js";
-import {
-  Elements,
-  PaymentElement,
-  useStripe,
-  useElements,
-} from "@stripe/react-stripe-js";
+import { useState, useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Box,
   Button,
@@ -20,23 +15,18 @@ import {
   Grid,
   useTheme,
 } from "@mui/material";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { colors } from "../theme/theme";
-import { DonationData, PaymentIntentResponse } from "../types";
-import { apiService } from "../services/api";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
+import { donationSchema, type DonationFormData } from "../types/donation";
+import { razorpayService } from "../services/razorpay";
 
-interface DonationFormProps {
-  onSuccess?: () => void;
-  onError?: (error: Error) => void;
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
 }
 
-const stripePromise = loadStripe(
-  process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!
-);
-
-const predefinedAmounts = [10, 25, 50, 100, 250, 500];
+const predefinedAmounts = [100, 500, 1000, 5000, 10000];
 
 export default function DonationPage() {
   return (
@@ -73,13 +63,9 @@ export default function DonationPage() {
   );
 }
 
-const DonationForm = ({ onSuccess, onError }: DonationFormProps) => {
-  const theme = useTheme();
-  const stripe = useStripe();
-  const elements = useElements();
-  const [clientSecret, setClientSecret] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [paymentError, setPaymentError] = useState("");
+function DonationForm() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const {
     register,
@@ -87,15 +73,26 @@ const DonationForm = ({ onSuccess, onError }: DonationFormProps) => {
     formState: { errors },
     watch,
     setValue,
-  } = useForm<DonationData>({
+  } = useForm<DonationFormData>({
+    resolver: zodResolver(donationSchema),
     defaultValues: {
-      amount: 10,
-      email: "",
-      currency: "USD",
+      amount: 500,
+      currency: "INR",
     },
   });
 
   const amount = watch("amount");
+
+  useEffect(() => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    document.body.appendChild(script);
+
+    return () => {
+      document.body.removeChild(script);
+    };
+  }, []);
 
   const handleAmountSelect = (value: number) => {
     setValue("amount", value, { shouldValidate: true });
@@ -103,35 +100,31 @@ const DonationForm = ({ onSuccess, onError }: DonationFormProps) => {
 
   const onSubmit = async (data: DonationFormData) => {
     try {
-      setIsLoading(true);
-      setPaymentError("");
+      setLoading(true);
+      setError("");
 
-      const response = await apiService.createDonation(data);
-      setClientSecret(response.clientSecret);
+      const orderData = await razorpayService.createOrder(data);
+      const options = razorpayService.getRazorpayOptions(orderData, data);
 
-      if (!stripe || !elements) {
-        throw new Error("Stripe has not been initialized");
-      }
+      const rzp = new window.Razorpay(options);
+      rzp.open();
 
-      const { error } = await stripe.confirmPayment({
-        elements,
-        confirmParams: {
-          return_url: `${window.location.origin}/donate/success`,
-          receipt_email: data.email,
-        },
+      rzp.on("payment.success", async (response: any) => {
+        await razorpayService.verifyPayment({
+          razorpay_payment_id: response.razorpay_payment_id,
+          razorpay_order_id: response.razorpay_order_id,
+          razorpay_signature: response.razorpay_signature,
+        });
+        // Handle success
       });
 
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      onSuccess?.();
+      rzp.on("payment.error", (error: any) => {
+        setError(error.description || "Payment failed");
+      });
     } catch (err) {
-      const error = err instanceof Error ? err : new Error("Payment failed");
-      setPaymentError(error.message);
-      onError?.(error);
+      setError(err instanceof Error ? err.message : "Payment failed");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
@@ -147,9 +140,9 @@ const DonationForm = ({ onSuccess, onError }: DonationFormProps) => {
       <form onSubmit={handleSubmit(onSubmit)}>
         <Stack spacing={3}>
           <Typography variant="h5" gutterBottom>
-            Choose Amount
+            Make a Donation
           </Typography>
-          
+
           <Grid container spacing={2}>
             {predefinedAmounts.map((preset) => (
               <Grid item xs={4} key={preset}>
@@ -157,14 +150,8 @@ const DonationForm = ({ onSuccess, onError }: DonationFormProps) => {
                   fullWidth
                   variant={amount === preset ? "contained" : "outlined"}
                   onClick={() => handleAmountSelect(preset)}
-                  sx={{
-                    borderColor: theme.palette.primary.main,
-                    '&:hover': {
-                      borderColor: theme.palette.primary.dark,
-                    },
-                  }}
                 >
-                  ${preset}
+                  ₹{preset}
                 </Button>
               </Grid>
             ))}
@@ -177,8 +164,15 @@ const DonationForm = ({ onSuccess, onError }: DonationFormProps) => {
             error={!!errors.amount}
             helperText={errors.amount?.message}
             InputProps={{
-              startAdornment: "$",
+              startAdornment: "₹",
             }}
+          />
+
+          <TextField
+            {...register("name")}
+            label="Full Name"
+            error={!!errors.name}
+            helperText={errors.name?.message}
           />
 
           <TextField
@@ -189,21 +183,17 @@ const DonationForm = ({ onSuccess, onError }: DonationFormProps) => {
             helperText={errors.email?.message}
           />
 
-          <AnimatePresence>
-            {clientSecret && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-              >
-                <PaymentElement />
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <TextField
+            {...register("phone")}
+            label="Phone (Optional)"
+            type="tel"
+            error={!!errors.phone}
+            helperText={errors.phone?.message}
+          />
 
-          {paymentError && (
+          {error && (
             <Alert severity="error" sx={{ mt: 2 }}>
-              {paymentError}
+              {error}
             </Alert>
           )}
 
@@ -211,17 +201,17 @@ const DonationForm = ({ onSuccess, onError }: DonationFormProps) => {
             type="submit"
             variant="contained"
             size="large"
-            disabled={isLoading || !stripe}
+            disabled={loading}
             sx={{ mt: 2 }}
           >
-            {isLoading ? (
+            {loading ? (
               <CircularProgress size={24} color="inherit" />
             ) : (
-              `Donate $${amount}`
+              `Donate ₹${amount}`
             )}
           </Button>
         </Stack>
       </form>
     </Paper>
   );
-};
+}

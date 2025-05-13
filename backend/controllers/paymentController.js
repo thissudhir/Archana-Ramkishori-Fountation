@@ -1,93 +1,110 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const Razorpay = require('razorpay');
+const crypto = require('crypto');
 const Donation = require('../models/Donation');
 const { AppError } = require('../utils/errors');
 
-const paymentController = {
-    createPaymentIntent: async (req, res, next) => {
-        try {
-            const { amount, currency = 'usd', email } = req.body;
+// Validate required environment variables
+if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+    throw new AppError('Razorpay credentials are not configured', 500);
+}
 
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
+const paymentController = {
+    createOrder: async (req, res, next) => {
+        try {
+            const { amount, currency = 'INR', email, name } = req.body;
+
+            // Validate inputs
             if (!amount || amount <= 0) {
-                throw new AppError('Invalid amount', 400);
+                throw new AppError('Amount must be greater than 0', 400);
             }
 
             if (!email) {
                 throw new AppError('Email is required', 400);
             }
 
-            const paymentIntent = await stripe.paymentIntents.create({
-                amount: Math.round(amount * 100),
+            if (!name) {
+                throw new AppError('Name is required', 400);
+            }
+
+
+            const options = {
+                amount: Math.round(amount * 100), // amount in paisa
                 currency,
-                metadata: { email },
-                automatic_payment_methods: { enabled: true },
-            });
+                receipt: `rcpt_${Date.now()}`,
+            };
+
+            const order = await razorpay.orders.create(options);
 
             await Donation.create({
-                transactionId: paymentIntent.id,
-                amount,
+                orderId: order.id,
+                amount: amount,
                 currency,
-                donor: { email },
+                donor: { email, name },
                 status: 'pending',
-                paymentMethod: 'stripe',
+                paymentMethod: 'razorpay',
             });
 
-            res.status(201).json({
-                clientSecret: paymentIntent.client_secret,
-            });
+            res.status(200).json(order);
         } catch (error) {
             next(error);
         }
     },
 
-    handleWebhook: async (req, res, next) => {
+    verifyPayment: async (req, res, next) => {
         try {
-            const sig = req.headers['stripe-signature'];
-            
-            if (!sig) {
-                throw new AppError('No Stripe signature found', 400);
+            const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+            const body = razorpay_order_id + "|" + razorpay_payment_id;
+            const expectedSignature = crypto
+                .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+                .update(body.toString())
+                .digest("hex");
+
+            if (expectedSignature !== razorpay_signature) {
+                throw new AppError('Invalid payment signature', 400);
             }
 
-            const event = stripe.webhooks.constructEvent(
-                req.body,
-                sig,
-                process.env.STRIPE_WEBHOOK_SECRET
+            await Donation.findOneAndUpdate(
+                { orderId: razorpay_order_id },
+                {
+                    status: 'completed',
+                    transactionId: razorpay_payment_id,
+                    updatedAt: new Date()
+                },
+                { new: true }
             );
 
-            switch (event.type) {
-                case 'payment_intent.succeeded':
-                    await handleSuccessfulPayment(event.data.object);
-                    break;
-                case 'payment_intent.payment_failed':
-                    await handleFailedPayment(event.data.object);
-                    break;
-                default:
-                    console.log(`Unhandled event type ${event.type}`);
-            }
-
-            res.json({ received: true });
+            res.status(200).json({
+                message: "Payment verified successfully"
+            });
         } catch (error) {
             next(error);
         }
     },
+
+    getDonationHistory: async (req, res, next) => {
+        try {
+            const { email } = req.query;
+
+            if (!email) {
+                throw new AppError('Email is required', 400);
+            }
+
+            const donations = await Donation.find({
+                'donor.email': email,
+                status: 'completed'
+            }).sort({ createdAt: -1 });
+
+            res.status(200).json(donations);
+        } catch (error) {
+            next(error);
+        }
+    }
 };
-
-async function handleSuccessfulPayment(paymentIntent) {
-    await Donation.findOneAndUpdate(
-        { transactionId: paymentIntent.id },
-        {
-            status: 'completed',
-            'donor.name': paymentIntent.shipping?.name,
-        },
-        { new: true }
-    );
-}
-
-async function handleFailedPayment(paymentIntent) {
-    await Donation.findOneAndUpdate(
-        { transactionId: paymentIntent.id },
-        { status: 'failed' },
-        { new: true }
-    );
-}
 
 module.exports = paymentController;
